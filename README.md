@@ -1,3 +1,5 @@
+Here is the refined `README.md` file, updated to accurately reflect the functionality of the provided Python script.
+
 # Archy AI Developer Co-pilot
 
 Archy is a local, command-line tool that acts as a "Prompt-Generation Co-pilot" for AI-assisted software development. It uses a structured, stateful workflow to help you guide a Large Language Model (LLM), like Google's Gemini, from a high-level idea to a complete, production-ready codebase.
@@ -9,7 +11,7 @@ This script manages the project's state, constructs perfectly-formatted, context
 This tool is built on a few key principles to ensure a robust and predictable development process:
 
 * **AI Persona ("Archy")**: The script generates prompts that instruct the LLM to act as an expert software architect, ensuring high-quality, consistent output.
-* **Stateful and Local**: The entire project plan, specifications, and code are stored locally in a `project_state.json` file in your project's root. This allows you to pause and resume your work at any time.
+* **Stateful and Local**: The entire project plan, specifications, and code are stored locally in a `project_state.json` file. This allows you to pause and resume your work at any time.
 * **Command-Driven Workflow**: You interact with Archy through a simple set of commands like `plan`, `code`, and `sync` to direct the development process.
 * **Co-pilot Model**: The script does not require API keys. It generates prompts for you to manually use in your preferred LLM chat interface, and then you paste the response back into the tool.
 
@@ -43,7 +45,7 @@ your-project-folder/
 ### Requirements
 
 * Python 3.x
-* `pyperclip` (optional, for automatic prompt copying)
+* `pyperclip` (for automatic prompt copying)
     ```sh
     pip install pyperclip
     ```
@@ -59,13 +61,14 @@ your-project-folder/
     * The script will generate a detailed prompt and copy it to your clipboard.
     * Paste this entire prompt into your LLM (e.g., Gemini).
     * The LLM will return a structured JSON response.
-    * Copy the full JSON response from the LLM.
-    * Paste it back into the waiting Archy terminal and finish by typing `END_OF_JSON` on a new line and pressing Enter.
-4.  **Generate Code**: Once you have specified a milestone, ask Archy to code a task.
+    * Copy the full JSON response from the LLM. The tool can handle raw JSON or a JSON object wrapped in markdown's triple backticks (```json).
+    * Paste it back into the waiting Archy terminal. To signal that you are done pasting, press `Ctrl+D` (on Linux/macOS) or `Ctrl+Z` followed by `Enter` (on Windows).
+4.  **Generate Code**: Once you have a plan, specify a milestone's tasks and then ask Archy to code a task.
     ```
+    > specify M1
     > code M1-T1
     ```
-5.  **Save Files**: After a `code` command, Archy will ask for confirmation before saving the generated files into the `generated_project/` directory.
+5.  **Save Files**: After a command like `code` or `generate_readme` modifies files, Archy will ask for confirmation before saving them into the `generated_project/` directory.
 6.  **Review and Sync**: Use `show_plan` or `show_code <Task-ID>` to review your state. If you clone your project to a new computer, you only need the `archy.py` and `project_state.json` files. Run `sync all` to completely regenerate the `generated_project/` directory.
 
 ### Available Commands
@@ -76,6 +79,7 @@ your-project-folder/
 | `specify` | `<Milestone-ID>` | Generates the detailed technical specifications for all tasks in a given milestone. |
 | `code` | `<Task-ID>` | Generates the code, tests, and dependency commands for a single task. |
 | `refine` | `<ID> <instruction>` | Modifies an existing plan, specification, or code artifact based on new instructions. |
+| `generate_readme` | *(none)* | Creates a `README.md` file for the project from the current state. |
 | `sync` | `<Task-ID \| all>` | Recreates files from the project state on disk inside the `generated_project/` directory. |
 | `show_plan`| *(none)* | Displays the current project plan stored in the state. |
 | `show_spec`| `<Milestone-ID>` | Displays the generated specifications for a given milestone. |

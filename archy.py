@@ -24,11 +24,12 @@ You are "Archy," an expert AI software architect and developer. Your sole purpos
 
 --- Quality & Security Gates (NON-NEGOTIABLE) ---
 When generating code (`code <ID>` or `refine <ID>`):
+- **File Object Schema**: Each entry in the `files` array MUST be a JSON object with exactly two keys: a `path` key (string) containing the full relative path for the file, and a `content` key (string) containing the entire file content. Do not use 'name' or any other keys for the file path.
 - **Security**: Never hardcode secrets. Use placeholders like `os.environ.get("API_KEY")` and state they must be managed via environment variables. All database queries MUST use parameterized statements. Sanitize all user-facing inputs.
 - **Error Handling**: Include robust error handling (e.g., try-except blocks) for I/O, network calls, etc.
 - **Readability**: Code must be well-commented with clear docstrings (purpose, args, returns). Adhere to language-specific style guides (e.g., PEP 8 for Python).
-- **Testing**: For each functional code file, provide a corresponding test file covering at least one success and one failure/edge case.
-- **Dependencies**: Do NOT invent version numbers. Provide a shell command to install dependencies (e.g., `pip install flask pytest`). Include this command in the `stateUpdate` for the relevant task.
+- **Testing**: For each functional code file, provide a corresponding test file covering at least one success and one failure/edge case. The test file should be included in the `files` array of the same response.
+- **Dependencies**: Do NOT invent version numbers. Provide a single shell command string to install dependencies (e.g., `pip install flask pytest`). Include this command in the `stateUpdate` for the relevant task under the `dependencies` key.
 
 --- User Commands ---
 You will respond to the following commands from the user. Client-side commands are listed for your awareness.
@@ -156,17 +157,21 @@ def save_files_from_update(code_update, task_id, force_save=False):
     if choice == 'y':
         # Loop for saving files
         for file in code_update['files']:
-            # FIX: Check for 'path' OR 'name' and ensure content exists
             file_path = file.get('path') or file.get('name')
             if isinstance(file, dict) and file_path and 'content' in file:
-                relative_path = os.path.join(*file_path.split('/'))
-                final_path = os.path.join(output_dir, relative_path)
+                output_dir_abs = os.path.abspath(output_dir)
+                final_path_abs = os.path.abspath(os.path.join(output_dir_abs, file_path))
+
+                if not final_path_abs.startswith(output_dir_abs):
+                    print(f"[System] Security Warning: Skipping file with malicious path: {file_path}")
+                    continue
                 
-                os.makedirs(os.path.dirname(final_path), exist_ok=True)
+                os.makedirs(os.path.dirname(final_path_abs), exist_ok=True)
                 
-                with open(final_path, 'w', encoding='utf-8') as f:
+                with open(final_path_abs, 'w', encoding='utf-8') as f:
                     f.write(file['content'])
-                print(f"  Saved {final_path}")
+                print(f"  Saved {final_path_abs}")
+                
         print(f"[System] Files for {task_id} saved.")
     else:
         print(f"[System] File save for task '{task_id}' skipped.")
@@ -300,8 +305,17 @@ Available Commands:
         
         print(f"\n[Archy] {response_json.get('message', 'No message received.')}")
 
-        if response_json.get('status') == 'success' and 'stateUpdate' in response_json:
+        if response_json.get('status', '').lower() == 'success' and 'stateUpdate' in response_json:
             update_data = response_json['stateUpdate']
+
+            # Validate the structure before merging
+            if 'code' in update_data and not isinstance(update_data['code'], dict):
+                print("[System] Error: Received malformed 'code' update. State will not be updated.")
+                continue
+            if 'specifications' in update_data and not isinstance(update_data['specifications'], dict):
+                print("[System] Error: Received malformed 'specifications' update. State will not be updated.")
+                continue
+
             deep_merge(update_data, project_state)
             save_state(project_state)
             print(f"[System] Project state updated and saved to '{STATE_FILE_PATH}'")
@@ -316,6 +330,8 @@ Available Commands:
             if 'readme' in update_data:
                 save_readme(update_data['readme'])
 
+        else:
+            print("[System] The AI indicated the request could not be completed successfully. Project state was not changed.")
 
 if __name__ == '__main__':
     main()

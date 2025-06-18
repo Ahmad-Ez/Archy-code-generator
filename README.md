@@ -1,5 +1,3 @@
-Here is the refined `README.md` file, updated to accurately reflect the functionality of the provided Python script.
-
 # Archy AI Developer Co-pilot
 
 Archy is a local, command-line tool that acts as a "Prompt-Generation Co-pilot" for AI-assisted software development. It uses a structured, stateful workflow to help you guide a Large Language Model (LLM), like Google's Gemini, from a high-level idea to a complete, production-ready codebase.

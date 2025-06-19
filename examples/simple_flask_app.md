@@ -2,11 +2,44 @@
 
 This document walks through a brief session with the Archy Co-pilot to create a simple "Hello, World!" web application using Python and Flask.
 
-The goal is to demonstrate the core `plan -> specify -> code` workflow.
+The goal is to demonstrate the core `plan -> specify -> code` workflow and showcase new features like project management and dependency aggregation.
+
+### Step 0: Start Archy and Select a Project
+
+First, we start the script. It now prompts us to select a project or create a new one by providing a path. For this example, we'll provide a path to a new folder.
+
+**You run the script:**
+```sh
+python archy.py
+```
+
+**Archy asks you to choose a project:**
+```
+[Archy] Select a project or provide a new path.
+  1. /path/to/another-project
+  ...
+
+Enter a number, a new project path, or 'exit':
+```
+
+**You type a path for your new app (use an absolute path):**
+```
+/path/to/my-flask-app
+```
+
+**Archy creates the directory and confirms:**
+```
+[System] The directory '/path/to/my-flask-app' does not exist.
+Do you want to create it? (y/N): y
+[System] Created project directory: '/path/to/my-flask-app'
+[System] Using project directory: '/path/to/my-flask-app'
+[System] Started a new project.
+Type 'plan <your project idea>' to start.
+```
 
 ### Step 1: Plan the Project
 
-First, we start the script and use the `plan` command to describe our goal at a high level.
+Now, inside the running tool, we use the `plan` command to describe our goal.
 
 **You type:**
 ```
@@ -15,13 +48,13 @@ First, we start the script and use the `plan` command to describe our goal at a 
 
 **Archy generates a prompt, you use it with your LLM, and paste back the response. The state is updated, and Archy confirms:**
 
-`[Archy] Project plan created successfully. Next, run \`specify M1\` to detail the first milestone.`
+`[Archy] Project plan created successfully. You can now specify a milestone, e.g., 'specify M1'.`
 
-*(Your `project_state.json` now contains the plan).*
+*(Your `/path/to/my-flask-app/.archy/project_state.json` now contains the plan).*
 
 ### Step 2: Specify the Milestone
 
-Next, we follow Archy's suggestion and ask it to specify the technical details for the first milestone.
+Next, we follow the suggestion and ask Archy to specify the technical details for the first milestone.
 
 **You type:**
 ```
@@ -30,50 +63,46 @@ Next, we follow Archy's suggestion and ask it to specify the technical details f
 
 **After the LLM round-trip, Archy responds:**
 
-`[Archy] Specification for M1 generated. Next, run \`code M1-T1\` to generate the application code.`
+`[Archy] Specification for M1 generated. You can now generate code for a task, e.g., 'code M1-T1'.`
 
-*(Your `project_state.json` is updated with detailed specifications for the files and logic needed).*
+*(The `project_state.json` is updated with detailed specifications for the files and logic needed).*
 
 ### Step 3: Generate the Code
 
-Now we get to the core of the work. We ask Archy to generate the Python code and the corresponding test file for the main task.
+Now we ask Archy to generate the Python code and the corresponding test file.
 
 **You type:**
 ```
 > code M1-T1
 ```
 
-**After the LLM round-trip, Archy provides the code and asks for confirmation to save:**
+**After the LLM round-trip, Archy aggregates the dependencies, provides the code, and asks for confirmation to save the files directly into your project directory.**
 
-`[Archy] Code for M1-T1 generated. You can now save the files.`
-
+`[Archy] Code for M1-T1 generated.`
 ```
-[System] Files for task 'M1-T1' will be saved in 'generated_project/':
-  - generated_project/app.py
-  - generated_project/test_app.py
+[System] Aggregated Pip dependencies: flask, pytest
+[System] Files for task 'M1-T1' will be saved in '/path/to/my-flask-app/':
+  - /path/to/my-flask-app/app.py
+  - /path/to/my-flask-app/test_app.py
 
 Install dependencies with: `pip install flask pytest`
-Do you want to save/overwrite the files for 'M1-T1'? (y/N):
+Do you want to save/overwrite these files? (y/N):
 ```
 
-**You type:**
+**You type `y` and Archy saves the files and updates the dependencies file:**
 ```
 y
-```
-
-**Archy saves the files:**
-
-```
-  Saved generated_project/app.py
-  Saved generated_project/test_app.py
+  Saved /path/to/my-flask-app/app.py
+  Saved /path/to/my-flask-app/test_app.py
 [System] Files for M1-T1 saved.
+[System] Updated '/path/to/my-flask-app/requirements.txt' with aggregated dependencies.
 ```
 
 ### Final Result
 
-After this short session, your `generated_project/` directory now contains a fully functional, testable Flask application.
+After this short session, your project directory now contains a fully functional, testable Flask application and a `requirements.txt` file.
 
-**`generated_project/app.py`:**
+**`app.py`:**
 ```python
 # app.py
 from flask import Flask, jsonify
@@ -94,7 +123,7 @@ if __name__ == '__main__':
     app.run(debug=True)
 ```
 
-**`generated_project/test_app.py`:**
+**`test_app.py`:**
 ```python
 # test_app.py
 import unittest
@@ -116,4 +145,10 @@ class GreetingAPITestCase(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+```
+
+**`requirements.txt`:**
+```
+flask
+pytest
 ```

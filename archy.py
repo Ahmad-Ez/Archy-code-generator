@@ -95,9 +95,9 @@ You will respond to the following commands from the user. Client-side commands a
 - `refine <ID> <instruction>`: Modifies an existing plan, spec, or code artifact based on the instruction.
 - `generate_readme`: Generates a `README.md` file for the project. Place the full markdown content in the `stateUpdate` object under a single key named `readme`.
 - (Client-side) `sync <Task-ID|all>`: User command to manually recreate files from the project state on disk.
-- (Client-side) `show_plan`: Displays the current project plan.
-- (Client-side) `show_spec <Milestone-ID>`: Displays the specification for a milestone.
-- (Client-side) `show_code <Task-ID>`: Displays the code for a task.
+- (Client-side) `show-plan`: Displays the current project plan.
+- (Client-side) `show-spec <Milestone-ID>`: Displays the specification for a milestone.
+- (Client-side) `show-code <Task-ID>`: Displays the code for a task.
 """
 
 # --- NEW: Global Archy Config Management ---
@@ -621,9 +621,9 @@ Available Commands:
 - refine <ID> <instruction>  : Modifies a plan, spec, or code. (Interactive)
 - generate_readme            : Creates a README.md from the project state.
 - sync <Task-ID|all>         : Recreates files from the project state, skipping ignored files.
-- show_plan                  : Displays the current project plan.
-- show_spec <Milestone-ID>   : Displays the specification for a milestone. (Interactive)
-- show_code <Task-ID>        : Displays the code for a task. (Interactive)
+- show-plan                  : Displays the current project plan.
+- show-spec <Milestone-ID>   : Displays the specification for a milestone. (Interactive)
+- show-code <Task-ID>        : Displays the code for a task. (Interactive)
 
 ENHANCED COMMANDS:
 - set-config <key> <value>   : Sets a global project configuration value (e.g., 'projectName').
@@ -717,7 +717,7 @@ An .archyignore file can be created in your project's .archy directory to protec
             continue
 
         # --- COMMANDS MODIFIED FOR INTERACTIVE MODE ---
-        if command in ['specify', 'code', 'refine', 'show_spec', 'show_code'] and not args:
+        if command in ['specify', 'code', 'refine', 'show-spec', 'show-code'] and not args:
             ### Initialize selected_id for each loop ###
             selected_id = None
             plan = project_state.get('plan', {})
@@ -725,13 +725,13 @@ An .archyignore file can be created in your project's .archy directory to protec
                 print("[System] A project plan is required. Use 'plan <description>' to start.")
                 continue
 
-            if command in ['specify', 'show_spec']:
+            if command in ['specify', 'show-spec']:
                 print("\n[System] Select a milestone:")
                 options = get_milestone_ids_from_plan(plan)
                 for i, mid in enumerate(options, 1):
                     print(f"  {i}. {mid}")
                 selected_id = prompt_for_id("Select the milestone number", options)
-            elif command in ['code', 'show_code']:
+            elif command in ['code', 'show-code']:
                 print("\n[System] Select a task:")
                 options = get_task_ids_from_plan(plan)
                 for i, tid in enumerate(options, 1):
@@ -767,13 +767,13 @@ An .archyignore file can be created in your project's .archy directory to protec
             # Reconstruct the user input for prompt generation
             user_input = f"{command} {args}"
 
-        if command == 'show_plan':
+        if command == 'show-plan':
             pprint(project_state.get('plan', "No plan found."))
             continue
-        elif command == 'show_spec':
+        elif command == 'show-spec':
             pprint(project_state.get('specifications', {}).get(args.upper(), "Specification not found."))
             continue
-        elif command == 'show_code':
+        elif command == 'show-code':
             pprint(project_state.get('code', {}).get(args.upper(), "Code not found."))
             continue
         elif command == 'sync':

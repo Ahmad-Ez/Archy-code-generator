@@ -73,6 +73,11 @@ your-project-folder/
 6.  **Save & Review**: After a `code` or `generate_readme` command, Archy may ask for confirmation before saving files into your project directory. Use `show_plan` or `show_code <Task-ID>` to review your state at any time.
 7.  **Sync Dependencies & Files**: The tool will automatically update dependency files like `requirements.txt`. If you ever need to regenerate all files from the state, run `sync all`.
 
+
+### Example
+[**Simple Flask App**](examples/simple_flask_app.md) : A walkthrough of creating a basic "Hello World" Flask application.
+
+
 ### Available Commands
 
 | Command | Parameters | Description |

@@ -31,26 +31,46 @@ You are "Archy," an expert AI software architect and developer. Your sole purpos
 3.  **Structured Output**: ALL of your output must be a single, self-contained JSON object following the specified schema: `{ "status": "...", "message": "...", "stateUpdate": { ... } }`.
 
 --- The Workflow: PLAN -> SPECIFY -> CODE -> REFINE ---
-1.  **PLAN**: Analyze the user's request and output a `projectState.plan` object. This object MUST contain a `milestones` dictionary. Each key in this dictionary is the milestone ID (e.g., "M1"). The value is an object containing a `description` and a `tasks` dictionary. Each key in the `tasks` dictionary is the task ID (e.g., "M1-T1"), and the value is the task description.
+1.  **PLAN**: Analyze the user's request and output a `projectState.plan` object. This object MUST contain a `milestones` dictionary.
+2.  **SPECIFY**: Detail a milestone's tasks, describing purpose, file structure, etc. This populates `projectState.specifications`.
+3.  **CODE**: Generate code files for a single task. This populates `projectState.code`.
+4.  **REFINE**: Apply user-provided instructions to modify an existing plan, spec, or code artifact.
 
-    **Correct Plan Structure Example:**
-    ```json
-    "plan": {
-      "milestones": {
-        "M1": {
-          "description": "Initial project setup.",
-          "tasks": {
-            "M1-T1": "Configure the server.",
-            "M1-T2": "Initialize the database."
-          }
+--- State Structure Guide ---
+This is an example of the target `projectState` structure you will be building. Note the consistent use of dictionaries keyed by IDs, with no redundant "id" fields inside the objects.
+
+{
+  "plan": {
+    "milestones": {
+      "M1": {
+        "description": "High-level goal for the first milestone.",
+        "tasks": {
+          "M1-T1": "Description for the first task.",
+          "M1-T2": "Description for the second task."
         }
       }
     }
-    ```
-
-2.  **SPECIFY**: Detail a milestone's tasks, describing purpose, inputs, outputs, file structure, and dependencies. This populates `projectState.specifications[Milestone-ID]`.
-3.  **CODE**: Generate code files for a single task. This populates `projectState.code[Task-ID]`.
-4.  **REFINE**: Apply user-provided instructions to modify an existing plan, spec, or code artifact. The relevant artifact will be provided in the context.
+  },
+  "specifications": {
+    "M1": {
+      "M1-T1": {
+        "title": "Title of the first task",
+        "purpose": "What this task aims to achieve.",
+        "file_structure": ["path/to/new_file.py", "path/to/test_file.py"],
+        "acceptance_criteria": ["The main function runs without error."]
+      }
+    }
+  },
+  "code": {
+    "M1-T1": {
+      "dependencies": "pip install pandas",
+      "files": {
+        "path/to/new_file.py": "import pandas as pd\\n\\ndef main():\\n    print(\\"Hello, world!\\")",
+        "path/to/test_file.py": "from new_file import main\\n\\ndef test_main():\\n    assert main is not None"
+      }
+    }
+  }
+}
 
 --- IMPORTANT: Handling Existing Files ---
 If the prompt includes an `EXISTING_FILES_TO_MODIFY` section, your primary goal is to intelligently merge the new requirements into the existing code.
@@ -60,11 +80,11 @@ If the prompt includes an `EXISTING_FILES_TO_MODIFY` section, your primary goal 
 
 --- Quality & Security Gates (NON-NEGOTIABLE) ---
 When generating code (`code <ID>` or `refine <ID>`):
-- **File Object Schema**: Each entry in the `files` array MUST be a JSON object with exactly two keys: a `path` key (string) containing the full relative path for the file, and a `content` key (string) containing the entire file content. Do not use 'name' or any other keys for the file path.
+- **File Object Schema**: The `files` key MUST be a JSON object. Each key within this object is the full relative `path` (string) for a file, and its value is the entire file `content` (string).
 - **Security**: Never hardcode secrets. Use placeholders like `os.environ.get("API_KEY")` and state they must be managed via environment variables. All database queries MUST use parameterized statements. Sanitize all user-facing inputs.
 - **Error Handling**: Include robust error handling (e.g., try-except blocks) for I/O, network calls, etc.
 - **Readability**: Code must be well-commented with clear docstrings (purpose, args, returns). Adhere to language-specific style guides (e.g., PEP 8 for Python).
-- **Testing**: For each functional code file, provide a corresponding test file covering at least one success and one failure/edge case. The test file should be included in the `files` array of the same response.
+- **Testing**: For each functional code file, provide a corresponding test file covering at least one success and one failure/edge case. The test file should be included in the `files` object of the same response.
 - **Dependencies**: Do NOT invent version numbers. Provide a single shell command string to install dependencies (e.g., `pip install flask pytest`). Include this command in the `stateUpdate` for the relevant task under the `dependencies` key.
 
 --- User Commands ---
@@ -369,9 +389,9 @@ def generate_prompt_for_user(user_command):
         # 1. Get all files planned for the current task from its specification
         planned_files = []
         try:
-            # This logic handles the spec format: "specifications": { "M1": [ { "id": "M1-T1", ... } ] }
-            milestone_spec_list = project_state.get("specifications", {}).get(milestone_id, [])
-            task_spec = next((spec for spec in milestone_spec_list if spec.get('id') == task_id), None)
+            # This logic handles the spec format: "specifications": { "M1": { "M1-T1": { ... } } }
+            milestone_specs = project_state.get("specifications", {}).get(milestone_id, {})
+            task_spec = milestone_specs.get(task_id)
             if task_spec:
                 planned_files.extend(task_spec.get('file_structure', []))
         except Exception as e:
@@ -380,27 +400,25 @@ def generate_prompt_for_user(user_command):
              print(f"[System] No 'file_structure' found in spec for {task_id}. Proceeding with standard 'code' command.")
         # 2. Find the current owner of each planned file
         all_code = project_state.get('code', {})
-        for pf in planned_files:
+        for planned_file_path in planned_files:
             for owner_id, code_block in all_code.items():
                 if owner_id == task_id: continue
-                for existing_file in code_block.get('files', []):
-                    if existing_file.get('path') == pf:
-                        file_ownership[pf] = owner_id
-                        break
+                if planned_file_path in code_block.get('files', {}):
+                    file_ownership[planned_file_path] = owner_id
+                    break # Found the owner, no need to check other tasks for this file
         # 3. Build the context for files that need modification
         files_to_modify = []
         if file_ownership:
             print("[System] Overlap detected! Building a smarter prompt to handle modifications.")
             for file_path, owner_id in file_ownership.items():
                 owner_code = all_code.get(owner_id, {})
-                for owner_file in owner_code.get('files', []):
-                    if owner_file.get('path') == file_path:
-                        files_to_modify.append({
-                            "path": file_path,
-                            "content": owner_file.get('content', ''),
-                            "owner_id": owner_id
-                        })
-                        break
+                # Direct lookup of file content
+                content = owner_code.get('files', {}).get(file_path, '')
+                files_to_modify.append({
+                    "path": file_path,
+                    "content": content,
+                    "owner_id": owner_id
+                })
         if files_to_modify:
             existing_files_prompt_section += "\n\n--- EXISTING_FILES_TO_MODIFY ---\n"
             existing_files_prompt_section += "You MUST intelligently merge the new requirements for the task below into the following existing file(s). Do NOT simply replace them.\n\n"
@@ -442,18 +460,16 @@ def save_files_from_update(code_update, task_id, force_save=False):
     if not force_save:
         print(f"\n[System] Files for task '{task_id}' will be saved in '{os.path.abspath(project_path)}/':")
         # Loop for displaying files
-        for file_info in code_update['files']:
-            if isinstance(file_info, dict) and file_info.get('path'):
-                full_path_for_display = os.path.join(project_path, file_info['path'])
-                print(f"  - {full_path_for_display}")
+        for file_path in code_update.get('files', {}).keys():
+            full_path_for_display = os.path.join(project_path, file_path)
+            print(f"  - {full_path_for_display}")
         if code_update.get('dependencies'):
             print(f"\nInstall dependencies with: `{code_update['dependencies']}`")
         choice = input(f"Do you want to save/overwrite these files? (y/N): ").lower()
     if choice == 'y':
         # Loop for saving files
-        for file_info in code_update['files']:
-             if isinstance(file_info, dict) and file_info.get('path') and 'content' in file_info:
-                file_path = file_info['path']
+        for file_path, file_content in code_update.get('files', {}).items():
+             if isinstance(file_path, str) and isinstance(file_content, str):
                 output_dir_abs = os.path.abspath(project_path)
                 final_path_abs = os.path.abspath(os.path.join(output_dir_abs, file_path))
                 if not final_path_abs.startswith(output_dir_abs):
@@ -465,7 +481,7 @@ def save_files_from_update(code_update, task_id, force_save=False):
                     continue
                 os.makedirs(os.path.dirname(final_path_abs), exist_ok=True)
                 with open(final_path_abs, 'w', encoding='utf-8') as f:
-                    f.write(file_info['content'])
+                    f.write(file_content)
                 print(f"  Saved {final_path_abs}")
         print(f"[System] Files for {task_id} saved.")
     else:
@@ -573,11 +589,10 @@ An .archyignore file can be created in your project's .archy directory to protec
                     if not mcontent.get('tasks'):
                         print(f"  - [WARNING] Milestone '{mid}' has no tasks defined.")
                         issues_found += 1
-            # 3. Check for specifications without code (handles list-of-objects structure for specs)
-            for mid, milestone_spec_list in specs.items():
-                if not isinstance(milestone_spec_list, list): continue
-                for task_spec in milestone_spec_list:
-                    task_id = task_spec.get('id')
+            # 3. Check for specifications without code (handles dict-of-objects structure for specs)
+            for mid, milestone_specs_dict in specs.items():
+                if not isinstance(milestone_specs_dict, dict): continue
+                for task_id in milestone_specs_dict.keys():
                     if task_id and task_id not in code:
                         print(f"  - [INFO] Task '{task_id}' has a specification but no code yet.")
                         issues_found += 1
@@ -752,29 +767,23 @@ An .archyignore file can be created in your project's .archy directory to protec
                 new_code_block = update_data['code'][current_task_id]
                 # Aggregate dependencies before state merge
                 aggregate_dependencies(new_code_block.get('dependencies'))
-                # Segregate files into new and modified
-                new_files_for_current_task = []
-                files_to_update_in_owner = {} # { owner_id: [file_obj, ...] }
-                for file_obj in new_code_block.get('files', []):
-                    file_path = file_obj['path']
+                # Segregate files and update state
+                new_files = {}
+                for file_path, file_content in new_code_block.get('files', {}).items():
                     if file_path in file_ownership:
+                        # This file belongs to another task, merge it there
                         owner_id = file_ownership[file_path]
-                        files_to_update_in_owner.setdefault(owner_id, []).append(file_obj)
-                        print(f"[System] Staging update for '{file_path}' to be merged into owner task '{owner_id}'.")
+                        owner_task_code = project_state['code'].setdefault(owner_id, {'files': {}})
+                        owner_task_code['files'][file_path] = file_content # Direct update
+                        print(f"[System] Staging update for '{file_path}' in owner task '{owner_id}'.")
                     else:
-                        new_files_for_current_task.append(file_obj)
-                # Update state for owner tasks
-                for owner_id, files in files_to_update_in_owner.items():
-                    owner_task_code = project_state['code'].setdefault(owner_id, {'files': []})
-                    # Create a dictionary of existing files for quick lookup
-                    existing_files_map = {f['path']: f for f in owner_task_code.get('files', [])}
-                    for file_to_update in files:
-                        existing_files_map[file_to_update['path']] = file_to_update # Add or overwrite
-                    owner_task_code['files'] = list(existing_files_map.values())
-                # Update state for the current task with only the new files
-                if new_files_for_current_task:
-                    current_task_code = project_state['code'].setdefault(current_task_id, {'files': []})
-                    current_task_code['files'] = new_files_for_current_task
+                        # This is a new file for the current task
+                        new_files[file_path] = file_content
+                
+                # Update state for the current task with only its new files
+                if new_files:
+                    current_task_code = project_state['code'].setdefault(current_task_id, {'files': {}})
+                    current_task_code['files'].update(new_files)
                     if new_code_block.get('dependencies'):
                         current_task_code['dependencies'] = new_code_block['dependencies']
                 # Save files immediately after state update and before deleting 'code' key

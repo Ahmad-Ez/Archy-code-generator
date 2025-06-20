@@ -37,7 +37,7 @@ You are "Archy," an expert AI software architect and developer. Your sole purpos
 4.  **REFINE**: Apply user-provided instructions to modify an existing plan, spec, or code artifact.
 
 --- State Structure Guide (EXAMPLE) ---
-This is the target `projectState` structure. Note that the `code` object contains the full file content for manifest files like `package.json`, and there is no separate `dependencies` key.
+This is the target `projectState` structure. Note that the `code` object contains the full file content for manifest files like `package.json`, and there is no separate `dependencies` key. Note the consistent use of dictionaries keyed by IDs, with no redundant "id" fields inside the objects.
 
 {
   "plan": {
@@ -45,7 +45,8 @@ This is the target `projectState` structure. Note that the `code` object contain
       "M1": {
         "description": "High-level goal for the first milestone.",
         "tasks": {
-          "M1-T1": "Description for the first task."
+          "M1-T1": "Description for the first task.",
+          "M1-T2": "Description for the second task."
         }
       }
     }
@@ -55,7 +56,7 @@ This is the target `projectState` structure. Note that the `code` object contain
       "M1-T1": {
         "title": "Setup Python Backend",
         "purpose": "To create the initial file structure and dependencies for a Python service.",
-        "file_structure": ["backend/main.py", "backend/requirements.txt"],
+        "file_structure": ["backend/main.py", "backend/requirements.txt", "backend/tests/test_main.py"],
         "acceptance_criteria": ["The requirements.txt file is created.", "The main function runs without error."]
       }
     }
@@ -64,7 +65,8 @@ This is the target `projectState` structure. Note that the `code` object contain
     "M1-T1": {
       "files": {
         "backend/main.py": "import os\\n\\ndef main():\\n    print(\\"Hello from the backend!\\")",
-        "backend/requirements.txt": "fastapi\\nuvicorn"
+        "backend/requirements.txt": "fastapi\\nuvicorn",
+        "backend/tests/test_main.py": "from backend.main import main\\n\\ndef test_main():\\n    assert main is not None"
       }
     }
   }
@@ -349,7 +351,11 @@ def generate_prompt_for_user(user_command):
             files_to_modify_context = []
             for file_path, owner_id in file_ownership.items():
                 content = all_code.get(owner_id, {}).get('files', {}).get(file_path, '')
-                files_to_modify_context.append({"path": file_path, "content": content, "owner_id": owner_id})
+                files_to_modify_context.append({
+                    "path": file_path,
+                    "content": content,
+                    "owner_id": owner_id
+                    })
             
             if files_to_modify_context:
                 existing_files_prompt_section += "\n\n--- EXISTING_FILES_TO_MODIFY ---\n"
@@ -686,7 +692,7 @@ An .archyignore file can be created in your project's .archy directory to protec
             pprint(project_state.get('projectConfig', "No project configuration has been set."))
             continue
 
-        # --- COMMANDS MODIFIED FOR INTERACTIVE MODE ---
+        # --- Interactive Mode Logic for LLM Commands ---
         if command in ['specify', 'code', 'refine', 'show-spec', 'show-code'] and not args:
             ### Initialize selected_id for each loop ###
             selected_id = None

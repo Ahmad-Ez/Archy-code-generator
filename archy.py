@@ -153,8 +153,13 @@ def select_project_path():
             # If it's not a number, treat as a path
             selected_path = os.path.abspath(choice)
             break
-    # Create the directory if it doesn't exist
-    if not os.path.exists(selected_path):
+
+    # SUGGESTION: Handle Path vs. Directory in Project Selection
+    if os.path.exists(selected_path):
+        if not os.path.isdir(selected_path):
+            print(f"[System] Error: The path '{selected_path}' points to a file, not a directory.")
+            return None
+    else:
         print(f"[System] The directory '{selected_path}' does not exist.")
         create = input("Do you want to create it? (y/N): ").lower()
         if create == 'y':
@@ -163,6 +168,7 @@ def select_project_path():
         else:
             print("[System] Project selection canceled.")
             return None
+
     update_recent_projects(selected_path)
     print(f"[System] Using project directory: '{selected_path}'")
     return selected_path
@@ -218,7 +224,8 @@ def save_checkpoint(name):
     checkpoint_path = os.path.join(checkpoint_dir, f"{name}.json")
     try:
         shutil.copyfile(state_file_path, checkpoint_path)
-        if name != ".undo": # Don't log undo checkpoints
+        # SUGGESTION: Improved comment clarity
+        if name != ".undo": # Don't print a confirmation message for automatic undo checkpoints
              print(f"[System] Checkpoint '{name}' saved successfully.")
         return True
     except Exception as e:
@@ -299,7 +306,7 @@ def prompt_for_id(prompt_message, id_options):
         return None
     while True:
         try:
-            choice_str = input(f"Enter the number of your choice (or press Enter to cancel): ")
+            choice_str = input(f"{prompt_message} (enter the number or press Enter to cancel): ")
             if not choice_str:
                 print("[System] Canceled.")
                 return None
@@ -364,7 +371,7 @@ def sync_dependency_files():
         else:
             print(f"[System] Could not find 'package.json' to update. Please manage NPM dependencies manually.")
 
-# --- LLM Interaction ---
+# --- LLM Interaction & State Processing ---
 def generate_prompt_for_user(user_command):
     """Constructs a context-aware prompt, prints it, and copies it to the clipboard."""
     command_parts = user_command.split(maxsplit=1)
@@ -405,14 +412,13 @@ def generate_prompt_for_user(user_command):
                 if owner_id == task_id: continue
                 if planned_file_path in code_block.get('files', {}):
                     file_ownership[planned_file_path] = owner_id
-                    break # Found the owner, no need to check other tasks for this file
+                    break
         # 3. Build the context for files that need modification
         files_to_modify = []
         if file_ownership:
             print("[System] Overlap detected! Building a smarter prompt to handle modifications.")
             for file_path, owner_id in file_ownership.items():
                 owner_code = all_code.get(owner_id, {})
-                # Direct lookup of file content
                 content = owner_code.get('files', {}).get(file_path, '')
                 files_to_modify.append({
                     "path": file_path,
@@ -425,12 +431,14 @@ def generate_prompt_for_user(user_command):
             for f in files_to_modify:
                 existing_files_prompt_section += f"File Path: {f['path']} (Owned by {f['owner_id']})\n"
                 existing_files_prompt_section += f"Existing Content:\n```\n{f['content']}\n```\n\n"
+    
     # Also include existing code if refining the same task
     elif command == 'refine' and task_id and project_state.get("code", {}).get(task_id):
         context_state.setdefault('code', {})[task_id] = project_state["code"][task_id]
     elif command == 'generate_readme':
         # README command needs all specifications for a full overview
         context_state['specifications'] = project_state.get("specifications")
+
     prompt = f"""{SYSTEM_PROMPT}
 
 --- Current Project State (Context) ---
@@ -448,6 +456,70 @@ def generate_prompt_for_user(user_command):
     except pyperclip.PyperclipException:
         print("[System] Could not copy to clipboard. Please install 'pyperclip' or copy the prompt manually.")
     return prompt, file_ownership
+
+# REFACTOR: New function to handle state updates from the AI
+def process_state_update(update_data, file_ownership):
+    """Handles merging the AI's state update into the global project_state."""
+    global project_state
+
+    tasks_with_modified_files = set()
+
+    # --- Automatic File Syncing and State Merging Logic ---
+    if 'code' in update_data:
+        current_task_id = list(update_data['code'].keys())[0]
+        new_code_block = update_data['code'][current_task_id]
+
+        # Aggregate dependencies before state merge
+        aggregate_dependencies(new_code_block.get('dependencies'))
+
+        # Segregate files and update state
+        new_files_for_current_task = {}
+
+        for file_path, file_content in new_code_block.get('files', {}).items():
+            if file_path in file_ownership:
+                # This file belongs to another task, merge it there
+                owner_id = file_ownership[file_path]
+                owner_task_code = project_state['code'].setdefault(owner_id, {'files': {}})
+                owner_task_code['files'][file_path] = file_content # Direct update
+                print(f"[System] Staging update for '{file_path}' in owner task '{owner_id}'.")
+                tasks_with_modified_files.add(owner_id) # Track the owner
+            else:
+                # This is a new file for the current task
+                new_files_for_current_task[file_path] = file_content
+        
+        # Update state for the current task with only its new files
+        if new_files_for_current_task:
+            current_task_code = project_state['code'].setdefault(current_task_id, {'files': {}})
+            current_task_code['files'].update(new_files_for_current_task)
+            if new_code_block.get('dependencies'):
+                current_task_code['dependencies'] = new_code_block['dependencies']
+            tasks_with_modified_files.add(current_task_id)
+
+        # Remove the original code update to prevent deep_merge from overwriting our careful logic
+        del update_data['code']
+    
+    # Now, merge the rest of the update data (plan, specs, projectConfig, etc.)
+    deep_merge(update_data, project_state)
+
+    # --- Save and Sync ---
+    if tasks_with_modified_files:
+        print("\n[System] The following tasks have new or modified code:")
+        for task_id in sorted(list(tasks_with_modified_files)):
+             print(f"  - {task_id}")
+
+        choice = input("Do you want to review and save these files now? (y/N): ").lower()
+        if choice == 'y':
+            for task_id in sorted(list(tasks_with_modified_files)):
+                save_files_from_update(project_state['code'][task_id], task_id)
+    
+    save_state()
+    print(f"[System] Project state updated and saved.")
+
+    # Offer to sync dependency files
+    sync_dependency_files()
+    if 'readme' in update_data:
+        save_readme(update_data['readme'])
+
 
 # --- File Operations (uses global project_path) ---
 def save_files_from_update(code_update, task_id, force_save=False):
@@ -516,7 +588,7 @@ def main():
         print("Exiting Archy. Goodbye!")
         return
     
-    project_path = selected_path # Set global project path
+    project_path = selected_path
     project_state = load_state()
     # Ensure the outputPath in the state is consistent with the selected path (Also to avoid malicious behaviour)
     project_state.setdefault('projectConfig', {})['outputPath'] = project_path
@@ -537,8 +609,6 @@ def main():
         command_parts = user_input.split(maxsplit=1)
         command = command_parts[0].lower()
         args = command_parts[1] if len(command_parts) > 1 else ""
-        ### Initialize selected_id for each loop ###
-        selected_id = None
 
         if command == 'exit':
             break
@@ -583,7 +653,6 @@ An .archyignore file can be created in your project's .archy directory to protec
                 print("  - [WARNING] Project 'outputPath' is not set in the configuration.")
                 issues_found += 1
             # 2. Check for milestones without tasks
-            # Checks based on dictionary structure
             if plan:
                 for mid, mcontent in plan.get('milestones', {}).items():
                     if not mcontent.get('tasks'):
@@ -595,15 +664,17 @@ An .archyignore file can be created in your project's .archy directory to protec
                 for task_id in milestone_specs_dict.keys():
                     if task_id and task_id not in code:
                         print(f"  - [INFO] Task '{task_id}' has a specification but no code yet.")
-                        issues_found += 1
+            
+            # FIX: Correct Data Structure Handling in `check` command
             # 4. Check for code without tests (basic heuristic)
             for task_id, task_code in code.items():
-                files = [f['path'] for f in task_code.get('files', [])]
+                files = list(task_code.get('files', {}).keys())
                 py_files = [f for f in files if f.endswith('.py') and not f.startswith('test_')]
-                test_files = [f for f in files if f.startswith('test_') and f.endswith('.py')]
+                test_files = [f for f in files if (f.startswith('test_') or f.startswith('tests/')) and f.endswith('.py')]
                 if py_files and not test_files:
                     print(f"  - [WARNING] Task '{task_id}' contains Python files but no corresponding test files.")
                     issues_found += 1
+            
             if issues_found == 0:
                 print("[System] All checks passed. No issues found.")
             else:
@@ -647,6 +718,8 @@ An .archyignore file can be created in your project's .archy directory to protec
 
         # --- COMMANDS MODIFIED FOR INTERACTIVE MODE ---
         if command in ['specify', 'code', 'refine', 'show_spec', 'show_code'] and not args:
+            ### Initialize selected_id for each loop ###
+            selected_id = None
             plan = project_state.get('plan', {})
             if not plan:
                 print("[System] A project plan is required. Use 'plan <description>' to start.")
@@ -657,19 +730,19 @@ An .archyignore file can be created in your project's .archy directory to protec
                 options = get_milestone_ids_from_plan(plan)
                 for i, mid in enumerate(options, 1):
                     print(f"  {i}. {mid}")
-                selected_id = prompt_for_id("Enter selection", options)
+                selected_id = prompt_for_id("Select the milestone number", options)
             elif command in ['code', 'show_code']:
                 print("\n[System] Select a task:")
                 options = get_task_ids_from_plan(plan)
                 for i, tid in enumerate(options, 1):
                     print(f"  {i}. {tid}")
-                selected_id = prompt_for_id("Enter selection", options)
+                selected_id = prompt_for_id("Select the task number", options)
             elif command == 'refine':
                 milestone_ids = get_milestone_ids_from_plan(plan)
                 task_ids = get_task_ids_from_plan(plan)
                 options = milestone_ids + task_ids
                 
-                print("\n[System] Select an artifact to refine.")
+                print("\n[System] Select an artifact to refine:")
                 print("--- Milestones ---")
                 for i, mid in enumerate(milestone_ids, 1):
                     print(f"  {i}. {mid}")
@@ -677,7 +750,7 @@ An .archyignore file can be created in your project's .archy directory to protec
                 for i, tid in enumerate(task_ids, len(milestone_ids) + 1):
                     print(f"  {i}. {tid}")
                 
-                selected_id = prompt_for_id("Enter number", options)
+                selected_id = prompt_for_id("Select the artifact number", options)
 
             if not selected_id:
                 continue
@@ -689,8 +762,11 @@ An .archyignore file can be created in your project's .archy directory to protec
                 args = f"{selected_id} {instruction}"
             else:
                 args = selected_id
-        
+
         # --- Non-LLM Display Commands ---
+            # Reconstruct the user input for prompt generation
+            user_input = f"{command} {args}"
+
         if command == 'show_plan':
             pprint(project_state.get('plan', "No plan found."))
             continue
@@ -725,13 +801,10 @@ An .archyignore file can be created in your project's .archy directory to protec
                     print(f"[System] Code for task '{task_id_upper}' not found. Use `code {task_id_upper}` to generate it.")
             continue
 
-        # --- Commands that require the LLM ---
         # Create an auto-undo checkpoint before the LLM call
         save_checkpoint('.undo')
-        ### Reconstruct user_input if interactive mode was used ###
-        if selected_id:
-            user_input = f"{command} {args}"
-        # Capture the file_ownership map from the prompt generation
+        
+        # --- Commands that require the LLM ---
         prompt, file_ownership = generate_prompt_for_user(user_input)
         if prompt is None:
             continue
@@ -760,51 +833,8 @@ An .archyignore file can be created in your project's .archy directory to protec
         print(f"\n[Archy] {response_json.get('message', 'No message received.')}")
 
         if response_json.get('status', '').lower() == 'success' and 'stateUpdate' in response_json:
-            update_data = response_json['stateUpdate']
-            # --- Automatic File Syncing and State Merging Logic ---
-            if 'code' in update_data:
-                current_task_id = list(update_data['code'].keys())[0]
-                new_code_block = update_data['code'][current_task_id]
-                # Aggregate dependencies before state merge
-                aggregate_dependencies(new_code_block.get('dependencies'))
-                # Segregate files and update state
-                new_files = {}
-                for file_path, file_content in new_code_block.get('files', {}).items():
-                    if file_path in file_ownership:
-                        # This file belongs to another task, merge it there
-                        owner_id = file_ownership[file_path]
-                        owner_task_code = project_state['code'].setdefault(owner_id, {'files': {}})
-                        owner_task_code['files'][file_path] = file_content # Direct update
-                        print(f"[System] Staging update for '{file_path}' in owner task '{owner_id}'.")
-                    else:
-                        # This is a new file for the current task
-                        new_files[file_path] = file_content
-                
-                # Update state for the current task with only its new files
-                if new_files:
-                    current_task_code = project_state['code'].setdefault(current_task_id, {'files': {}})
-                    current_task_code['files'].update(new_files)
-                    if new_code_block.get('dependencies'):
-                        current_task_code['dependencies'] = new_code_block['dependencies']
-                # Save files immediately after state update and before deleting 'code' key
-                deep_merge(update_data, project_state) # Merge other potential updates first
-                # Remove the original code update to prevent deep_merge from overwriting our logic
-                del update_data['code']
-                # Offer to save the modified files to disk
-                for owner_id in files_to_update_in_owner:
-                    save_files_from_update(project_state['code'][owner_id], owner_id)
-                if new_files_for_current_task:
-                    save_files_from_update(project_state['code'][current_task_id], current_task_id)
-            
-            # Now, merge the rest of the update data (plan, specs, etc.)
-            deep_merge(update_data, project_state)
-            save_state()
-            print(f"[System] Project state updated and saved.")
-
-            # Offer to sync dependency files
-            sync_dependency_files()
-            if 'readme' in update_data:
-                save_readme(update_data['readme'])
+            # REFACTOR: Call the dedicated function to process the update
+            process_state_update(response_json['stateUpdate'], file_ownership)
         else:
             print("[System] The AI indicated the request could not be completed successfully. Project state was not changed.")
 

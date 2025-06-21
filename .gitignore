@@ -1,3 +1,5 @@
 /.venv
+/archetypes/pex_webapp.py
 archy_config.json
 run.ps1
+__pycache__

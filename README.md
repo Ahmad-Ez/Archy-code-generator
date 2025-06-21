@@ -1,39 +1,52 @@
 # Archy AI Developer Co-pilot
 
-Archy is a local, command-line tool that acts as a "Prompt-Generation Co-pilot" for AI-assisted software development. It uses a structured, stateful workflow to help you guide a Large Language Model (LLM), like Google's Gemini, from a high-level idea to a complete, production-ready codebase.
+Archy is a local, command-line tool that acts as a "Prompt-Generation Co-pilot" for AI-assisted software development. It uses an extensible, stateful workflow to help you guide a Large Language Model (LLM), like Google's Gemini, from a high-level idea to a complete, production-ready codebase.
 
-This script manages the project's state, constructs perfectly-formatted, context-aware prompts, and provides a framework for saving, modifying, and iterating on the code the LLM produces.
+This script manages the project's state, constructs perfectly-formatted, context-aware prompts based on project "archetypes," and provides a framework for saving, modifying, and iterating on the code the LLM produces.
 
 ### Core Concepts
 
 This tool is built on a few key principles to ensure a robust and predictable development process:
 
   * **AI Persona ("Archy")**: The script generates prompts that instruct the LLM to act as an expert software architect, ensuring high-quality, consistent output.
+  * **Extensible via Archetypes**: Archy uses a plugin system where each project is based on an "archetype" (a simple Python file). These archetypes define the starting template, provide project-specific context to the AI, and can even add custom commands to the tool.
   * **Stateful and Local-First**: The entire project plan, specifications, and code are stored locally. The tool manages multiple projects, with each project's state contained within its own directory.
   * **Command-Driven Workflow**: You interact with Archy through a simple set of commands like `plan`, `code`, and `checkpoint` to direct the development process.
   * **Co-pilot Model**: The script does not require API keys. It generates prompts for you to manually use in your preferred LLM chat interface, and then you paste the response back into the tool.
 
 ### Features
 
+  * **Plugin-Based Archetypes**: Start projects from different templates (e.g., a simple script, a generic web app, or a highly specialized service). Archetypes make Archy adaptable to virtually any kind of software project.
   * **Multi-Project Management**: Work on multiple projects and easily switch between them.
   * **Interactive REPL**: A simple command-line interface for managing your project. Commands like `code`, `specify`, and `refine` can be run without arguments to enter an interactive mode that prompts you to select from available milestones or tasks.
-  * **Local State Persistence**: Automatically saves your progress to a `.archy/project_state.json` file within your project folder.
+  * **Local State Persistence**: Automatically saves your progress to an `.archy/project_state.json` file within your project folder.
   * **Checkpoint & Undo**: Save named checkpoints of your project state and revert back to them at any time. An `undo` command reverts the last action.
-  * **Intelligent Dependency & File Merging**: Automatically detects when a task needs to modify a file created by another task (e.g., adding a new dependency to an existing `requirements.txt`). It instructs the AI to perform the merge and ensures the final result is correctly combined in the project state, preventing overwrites.
+  * **Intelligent Dependency & File Merging**: Automatically detects when a task needs to modify a file created by another task (e.g., adding a new dependency to an existing `requirements.txt`). It instructs the AI to perform the merge and ensures the final result is correctly combined in the project state.
   * **Clipboard Integration**: Automatically copies generated prompts to your clipboard (requires `pyperclip`).
   * **File Syncing & Protection**: A `sync` command to regenerate all project files from the state file. An `.archyignore` file can be used to protect specific files from being overwritten.
 
 ### Project Structure
 
-When you use the tool, your project directory will be organized as follows:
+A typical Archy setup involves the tool itself and the projects it manages.
 
 ```
-your-project-folder/
+archy-tool-folder/
+│
+├── archy.py                <-- The main script you run.
+│
+└── archetypes/             <-- Directory for all project archetypes.
+    ├── simple.py           <-- A basic, general-purpose archetype.
+    └── generic_webapp.py   <-- A starter for full-stack web apps.
+    └── ...                 <-- Add your own custom archetypes here.
+
+
+your-project-folder/        <-- A project you are building with Archy.
 │
 ├── .archy/                 <-- Internal directory for the co-pilot.
 │   ├── project_state.json  <-- The "brain" of your project. Safely commit this file.
+│   ├── archetype.conf      <-- Records which archetype this project uses.
 │   ├── checkpoints/        <-- Contains all your saved checkpoints.
-│   └── .archyignore        <-- (Optional) List files for Archy to ignore.
+│   └── .archyignore        <-- (Optional) List of files for Archy to ignore.
 │
 ├── src/                    <-- All your project's code, tests, and modules...
 │   └── main.py             <-- ...are generated directly into the project folder.
@@ -46,62 +59,70 @@ your-project-folder/
 ### Requirements
 
   * Python 3.x
-  * `pyperclip` (for automatic prompt copying)
+  * `pyperclip` (optional, for automatic prompt copying)
     ```sh
     pip install pyperclip
     ```
 
 ### How to Use
 
-1.  **Start the Script**: Run `python archy.py` in your terminal. On the first run, it will create a global config file.
-2.  **Select a Project**: The script will prompt you to select a recent project or enter a new, absolute path for a new project. The directory will be created if it doesn't exist.
-3.  **Plan Your Project**: Begin by describing your idea. This creates the initial plan in your project's state.
+1.  **Start the Script**: Run `python archy.py` in your terminal. On the first run, it will create a global config file in your user home directory (`~/.archy/`).
+
+2.  **Select a Project & Archetype**: The script will prompt you to select a recent project or enter a new, absolute path for a new project.
+
+      * If you create a new project, you will then be prompted to choose from the available archetypes found in the `archetypes/` directory.
+
+3.  **Plan Your Project**: Begin by describing your idea using the `plan` command. This creates the initial plan in your project's state.
+
     ```
     > plan a simple python cli that counts words in a file
     ```
+
 4.  **The Co-pilot Loop**:
+
       * The script will generate a detailed prompt and copy it to your clipboard.
       * Paste this entire prompt into your LLM (e.g., Gemini).
       * The LLM will return a structured JSON response.
-      * Copy the full JSON response from the LLM. The tool can handle raw JSON or a JSON object wrapped in markdown's triple backticks (```json```).
+      * Copy the full JSON response from the LLM. The tool can handle raw JSON or a JSON object wrapped in markdown's triple backticks (`json`).
       * Paste it back into the waiting Archy terminal. To signal that you are done pasting, press `Ctrl+D` (on Linux/macOS) or `Ctrl+Z` followed by `Enter` (on Windows).
+
 5.  **Generate Code**: Once you have a plan, specify a milestone's tasks and then ask Archy to code a task. You can use the interactive mode by running `specify` or `code` without arguments.
+
     ```
     > specify M1
     > code M1-T1
     ```
-6.  **Save & Review**: After a `code` or `generate_readme` command, Archy may ask for confirmation before saving files into your project directory. Use `show_plan` or `show_code <Task-ID>` to review your state at any time.
+
+6.  **Save & Review**: After a `code` or `generate_readme` command, Archy may ask for confirmation before saving files into your project directory. Use `show-plan` or `show-code <Task-ID>` to review your state at any time.
+
 7.  **Sync Dependencies & Files**: The tool will automatically update dependency files like `requirements.txt`. If you ever need to regenerate all files from the state, run `sync all`.
-
-
-### Example
-[**Simple Flask App**](examples/simple_flask_app.md) : A walkthrough of creating a basic "Hello World" Flask application.
-
 
 ### Available Commands
 
-| Command | Parameters | Description |
-| --- | --- | --- |
-| **Core Workflow** | | |
-| `plan` | `<description>` | Creates a new project plan and initializes the project state. |
-| `specify` | `[Milestone-ID]` | Generates the detailed technical specifications for all tasks in a given milestone. Runs in interactive mode if ID is omitted. |
-| `code` | `[Task-ID]` | Generates or merges code, tests, and dependency commands for a single task. Runs in interactive mode if ID is omitted. |
-| `refine` | `<ID> <instruction>` | Modifies an existing plan, spec, or code artifact based on new instructions. Can be run interactively. |
-| `generate_readme` | *(none)* | Creates a `README.md` file for the project from the current state. |
-| **State & File Management** | | |
-| `checkpoint` | `<name>` | Saves the current project state as a named checkpoint. |
-| `list-checkpoints`| *(none)* | Shows all saved checkpoints for the current project. |
-| `revert` | `<name>` | Reverts the project state to a named checkpoint. |
-| `undo` | *(none)* | Reverts the last state-changing operation. |
-| `sync` | `<Task-ID \| all>` | Recreates files from the project state on disk, skipping ignored files. |
-| **Configuration & Inspection** | | |
-| `set-config` | `<key> <value>` | Sets a global configuration value for the project (e.g., `projectName`). |
-| `show-config` | *(none)* | Displays the current project configuration settings. |
-| `show_plan`| *(none)* | Displays the current project plan stored in the state. |
-| `show_spec`| `[Milestone-ID]` | Displays the generated specifications for a given milestone. Can be run interactively. |
-| `show_code`| `[Task-ID]` | Displays the generated code for a given task. Can be run interactively. |
-| `show-deps` | *(none)* | Displays a summary of all dependencies aggregated from manifest files in the state. |
-| `check` | *(none)* | Validates the project state for inconsistencies. |
-| **General** | | |
-| `help` | *(none)* | Displays a list of all available commands and their usage. |
-| `exit` | *(none)* | Quits the application. |
+The following commands are available in the Archy REPL. Archetypes can also add their own custom commands.
+
+| Command Usage                  | Description                                                      |
+| ------------------------------ | ---------------------------------------------------------------- |
+| **Core Workflow** |                                                                  |
+| `plan <description>`           | Creates a new project plan.                                      |
+| `specify <Milestone-ID>`       | Generates specifications for a milestone. (Interactive)        |
+| `code <Task-ID>`               | Generates or merges code for a task. (Interactive)               |
+| `refine <ID> <instruction>`    | Modifies a plan, spec, or code. (Interactive)                    |
+| `generate_readme`              | Creates a README.md from the project state.                      |
+| **State & File Management** |                                                                  |
+| `sync <Task-ID\|all>`          | Recreates files from project state, skipping ignored files.      |
+| `checkpoint <name>`            | Saves the current project state as a named checkpoint.           |
+| `list-checkpoints`             | Shows all saved checkpoints.                                     |
+| `revert <name>`                | Reverts the project state to a named checkpoint.                 |
+| `undo`                         | Reverts the last state-changing operation.                       |
+| **Configuration & Inspection** |                                                                  |
+| `set-config <key> <value>`     | Sets a global project configuration value (e.g., 'projectName'). |
+| `show-config`                  | Displays the current project configuration settings.             |
+| `show-plan`                    | Displays the current project plan.                               |
+| `show-spec <Milestone-ID>`     | Displays the specification for a milestone. (Interactive)        |
+| `show-code <Task-ID>`          | Displays the code for a task. (Interactive)                      |
+| `show-deps`                    | Displays a summary of all dependencies from manifest files.      |
+| `check`                        | Validates the project state for inconsistencies.                 |
+| **General** |                                                                  |
+| `help`                         | Displays this list of available commands.                        |
+| `exit`                         | Quits the application.                                           |

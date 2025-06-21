@@ -930,7 +930,6 @@ def main():
         if not response_str.strip():
             print("[System] No response received. Aborting command.")
             continue
-
         try:
             if response_str.strip().startswith("```json"):
                 response_str = response_str.strip()[7:-4].strip()

@@ -2,33 +2,143 @@ import json
 import os
 import pyperclip
 from pprint import pprint
-import collections.abc
 import shutil
 import fnmatch
+import importlib.util
+import sys
 
 # --- Global Configuration for Archy ---
-# This config is for the tool itself, not a specific project.
-ARCHY_CONFIG_PATH = "archy_config.json"
+ARCHY_CONFIG_PATH = os.path.join(os.path.expanduser("~"), ".archy", "config.json")
 MAX_RECENT_PROJECTS = 10
+ARCHETYPE_DIR = "archetypes" # Directory for project archetypes
 
 # --- Project-Specific Configuration (Dynamically Determined) ---
-# These will be set after the user selects a project.
 STATE_FILE_NAME = "project_state.json"
 CHECKPOINT_DIR_NAME = ".archy/checkpoints"
+ARCHETYPE_CONFIG_FILE = ".archy/archetype.conf"
 
 # --- Global State Variables (Initialized in main) ---
-project_path = None # Will be set after project selection
-project_state = {}  # Will be loaded after project selection
-
+project_path = None
+project_state = {}
+current_archetype_module = None # Will hold the loaded module for the current project
+custom_commands = {} # Will hold custom commands from the archetype
+COMMAND_DEFINITIONS = {
+    # AI-Aware Commands (Included in the prompt to the LLM)
+    "plan": {
+        "usage": "plan <description>",
+        "desc": "Creates a new project plan.",
+        "ai_aware": True
+    },
+    "specify": {
+        "usage": "specify <Milestone-ID>",
+        "desc": "Generates specifications for a milestone. (Interactive)",
+        "ai_aware": True
+    },
+    "code": {
+        "usage": "code <Task-ID>",
+        "desc": "Generates or merges code for a task. (Interactive)",
+        "ai_aware": True
+    },
+    "refine": {
+        "usage": "refine <ID> <instruction>",
+        "desc": "Modifies a plan, spec, or code. (Interactive)",
+        "ai_aware": True
+    },
+    "generate_readme": {
+        "usage": "generate_readme",
+        "desc": "Creates a README.md from the project state.",
+        "ai_aware": True
+    },
+    # Client-Side Only Commands (For user help, but not sent to the LLM)
+    "sync": {
+        "usage": "sync <Task-ID|all>",
+        "desc": "Recreates files from project state, skipping ignored files.",
+        "ai_aware": False
+    },
+    "show-plan": {
+        "usage": "show-plan",
+        "desc": "Displays the current project plan.",
+        "ai_aware": False
+    },
+    "show-spec": {
+        "usage": "show-spec <Milestone-ID>",
+        "desc": "Displays the specification for a milestone. (Interactive)",
+        "ai_aware": False
+    },
+    "show-code": {
+        "usage": "show-code <Task-ID>",
+        "desc": "Displays the code for a task. (Interactive)",
+        "ai_aware": False
+    },
+    "show-deps": {
+        "usage": "show-deps",
+        "desc": "Displays a summary of all dependencies from manifest files.",
+        "ai_aware": False
+    },
+    "set-config": {
+        "usage": "set-config <key> <value>",
+        "desc": "Sets a global project configuration value (e.g., 'projectName').",
+        "ai_aware": False
+    },
+    "show-config": {
+        "usage": "show-config",
+        "desc": "Displays the current project configuration settings.",
+        "ai_aware": False
+    },
+    "check": {
+        "usage": "check",
+        "desc": "Validates the project state for inconsistencies.",
+        "ai_aware": False
+    },
+    "checkpoint": {
+        "usage": "checkpoint <name>",
+        "desc": "Saves the current project state as a named checkpoint.",
+        "ai_aware": False
+    },
+    "list-checkpoints": {
+        "usage": "list-checkpoints",
+        "desc": "Shows all saved checkpoints.",
+        "ai_aware": False
+    },
+    "revert": {
+        "usage": "revert <name>",
+        "desc": "Reverts the project state to a named checkpoint.",
+        "ai_aware": False
+    },
+    "undo": {
+        "usage": "undo",
+        "desc": "Reverts the last state-changing operation.",
+        "ai_aware": False
+    },
+    "exit": {
+        "usage": "exit",
+        "desc": "Quits the application.",
+        "ai_aware": False
+    }
+}
 # --- System Prompt for the AI ---
-SYSTEM_PROMPT = """
+def get_archy_master_prompt():
+    """Returns the master system prompt for the AI, with commands generated dynamically."""
+    # Generate the user commands section from the single source of truth
+    user_commands_prompt_section = "\n--- User Commands ---\nYou will respond to the following commands from the user. Client-side commands are listed for your awareness.\n"
+    for cmd, details in COMMAND_DEFINITIONS.items():
+        if details["ai_aware"]:
+            # These are commands the AI needs to process directly
+            user_commands_prompt_section += f"- `{details['usage']}`: {details['desc']}\n"
+        else:
+            # These are commands the AI just needs to be aware of as client-side
+            user_commands_prompt_section += f"- (Client-side) `{details['usage']}`: {details['desc']}\n"
+
+    # The main prompt template
+    base_prompt = """
 You are "Archy," an expert AI software architect and developer. Your sole purpose is to collaborate with a user to transform a project plan into a complete, production-ready codebase. You are methodical, precise, and security-conscious.
 
 --- Core Principles ---
 1.  **Stateful Interaction**: You operate on a `projectState` JSON object provided in the prompt. Your response MUST be a single JSON object containing a `stateUpdate` that will be merged back into the project state.
-2.  **Global Configuration**: If a `projectConfig` object is provided, you should use the values within it (e.g., projectName, author) to inform your generated code, comments, and documentation.
-3.  **Structured Output**: ALL of your output must be a single, self-contained JSON object following the specified schema: `{ "status": "...", "message": "...", "stateUpdate": { ... } }`.
-4.  **Dependencies**: To add dependencies, you MUST directly modify the content of the appropriate manifest file (e.g., `package.json`, `requirements.txt`, `pyproject.toml`) within the `files` object. DO NOT use a separate 'dependencies' key.
+2.  **Global Configuration**: If a `projectConfig` object is provided, you must use the values within it (e.g., projectName, author) to inform your generated code, comments, and documentation.
+3.  **Archetype Context**: The user may provide additional context or instructions from a project "archetype." This context is an extension of these core principles and provides specialized guidance for the current project type (e.g., web app, CLI tool). Pay close attention to it.
+4.  **Structured Output**: ALL of your output must be a single, self-contained JSON object following the specified schema: `{ "status": "...", "message": "...", "stateUpdate": { ... } }`.
+5.  **Dependencies**: To add dependencies, you MUST directly modify the content of the appropriate manifest file (e.g., `package.json`, `requirements.txt`) within the `files` object. DO NOT use a separate 'dependencies' key.
 
 --- The Workflow: PLAN -> SPECIFY -> CODE -> REFINE ---
 1.  **PLAN**: Analyze the user's request and output a `projectState.plan` object. This object MUST contain a `milestones` dictionary.
@@ -36,41 +146,8 @@ You are "Archy," an expert AI software architect and developer. Your sole purpos
 3.  **CODE**: Generate code files for a single task. This populates `projectState.code`.
 4.  **REFINE**: Apply user-provided instructions to modify an existing plan, spec, or code artifact.
 
---- State Structure Guide (EXAMPLE) ---
-This is the target `projectState` structure. Note that the `code` object contains the full file content for manifest files like `package.json`, and there is no separate `dependencies` key. Note the consistent use of dictionaries keyed by IDs, with no redundant "id" fields inside the objects.
-
-{
-  "plan": {
-    "milestones": {
-      "M1": {
-        "description": "High-level goal for the first milestone.",
-        "tasks": {
-          "M1-T1": "Description for the first task.",
-          "M1-T2": "Description for the second task."
-        }
-      }
-    }
-  },
-  "specifications": {
-    "M1": {
-      "M1-T1": {
-        "title": "Setup Python Backend",
-        "purpose": "To create the initial file structure and dependencies for a Python service.",
-        "file_structure": ["backend/main.py", "backend/requirements.txt", "backend/tests/test_main.py"],
-        "acceptance_criteria": ["The requirements.txt file is created.", "The main function runs without error."]
-      }
-    }
-  },
-  "code": {
-    "M1-T1": {
-      "files": {
-        "backend/main.py": "import os\\n\\ndef main():\\n    print(\\"Hello from the backend!\\")",
-        "backend/requirements.txt": "fastapi\\nuvicorn",
-        "backend/tests/test_main.py": "from backend.main import main\\n\\ndef test_main():\\n    assert main is not None"
-      }
-    }
-  }
-}
+--- Understanding the State ---
+You may encounter various top-level keys in the project state, such as `schema` (for database models), `apiContract` (for API endpoints), or `dataAssets`. Use the information within these keys to inform your architectural decisions and code generation. For example, if a `schema` key exists, your generated API and database code should reflect it.
 
 --- IMPORTANT: Handling Existing Files & Dependencies ---
 If the prompt includes an `EXISTING_FILES_TO_MODIFY` section, your primary goal is to intelligently merge the new requirements into the existing code.
@@ -80,24 +157,14 @@ If the prompt includes an `EXISTING_FILES_TO_MODIFY` section, your primary goal 
 
 --- Quality & Security Gates (NON-NEGOTIABLE) ---
 When generating code:
-- **File Object Schema**: The `files` key MUST be a JSON object. Each key within this object is the full relative `path` (string) for a file, and its value is the entire file `content` (string).
+- **File Object Schema**: The `files` key MUST be a JSON object. Each key is the full relative `path` (string), and its value is the entire file `content` (string).
 - **Security**: Never hardcode secrets. Use placeholders like `os.environ.get("API_KEY")` and state they must be managed via environment variables. All database queries MUST use parameterized statements. Sanitize all user-facing inputs.
 - **Error Handling**: Include robust error handling (e.g., try-except blocks).
 - **Readability**: Code must be well-commented with clear docstrings and adhere to style guides (e.g., PEP 8 for Python).
-- **Testing**: For each functional code file, provide a corresponding test file covering at least one success and one failure/edge case. The test file should be included in the `files` object of the same response..
-
---- User Commands ---
-You will respond to the following commands from the user. Client-side commands are listed for your awareness.
-- `plan <description>`: Creates a new project plan.
-- `specify <Milestone-ID>`: Generates specifications for all tasks in a milestone.
-- `code <Task-ID>`: Generates code and tests for a single task.
-- `refine <ID> <instruction>`: Modifies an existing plan, spec, or code artifact based on the instruction.
-- `generate_readme`: Generates a `README.md` file for the project. Place the full markdown content in the `stateUpdate` object under a single key named `readme`.
-- (Client-side) `sync <Task-ID|all>`: User command to manually recreate files from the project state on disk.
-- (Client-side) `show-plan`: Displays the current project plan.
-- (Client-side) `show-spec <Milestone-ID>`: Displays the specification for a milestone.
-- (Client-side) `show-code <Task-ID>`: Displays the code for a task.
+- **Testing**: For each functional code file, provide a corresponding test file covering at least one success and one failure/edge case. The test file should be included in the `files` object of the same response.
 """
+    # Append the dynamically generated commands section to the base prompt
+    return base_prompt + user_commands_prompt_section
 
 # --- Global Archy Config Management ---
 def load_archy_config():
@@ -107,11 +174,12 @@ def load_archy_config():
     try:
         with open(ARCHY_CONFIG_PATH, 'r') as f:
             return json.load(f)
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, FileNotFoundError):
         return {"recent_projects": []}
 
 def save_archy_config(config):
     """Saves the main archy config file."""
+    os.makedirs(os.path.dirname(ARCHY_CONFIG_PATH), exist_ok=True)
     with open(ARCHY_CONFIG_PATH, 'w') as f:
         json.dump(config, f, indent=2)
 
@@ -119,13 +187,9 @@ def update_recent_projects(selected_path):
     """Adds a project path to the top of the recent projects list."""
     config = load_archy_config()
     recent_projects = config.get("recent_projects", [])
-
-    # If path exists, remove it to re-add it to the top
     if selected_path in recent_projects:
         recent_projects.remove(selected_path)
     recent_projects.insert(0, selected_path)
-    # Trim the list to the max allowed length
-
     config["recent_projects"] = recent_projects[:MAX_RECENT_PROJECTS]
     save_archy_config(config)
 
@@ -137,11 +201,10 @@ def select_project_path():
     for i, path in enumerate(recent_projects, 1):
         print(f"  {i}. {path}")
     while True:
-        choice = input(f"\nEnter a number, a new project path, or 'exit': ")
+        choice = input("\nEnter a number, a new project path, or 'exit': ")
         if choice.lower() == 'exit':
             return None
         try:
-            # Try to interpret as a number first
             choice_num = int(choice)
             if 1 <= choice_num <= len(recent_projects):
                 selected_path = recent_projects[choice_num - 1]
@@ -149,48 +212,102 @@ def select_project_path():
             else:
                 print("[System] Invalid number. Please try again.")
         except ValueError:
-            # If it's not a number, treat as a path
             selected_path = os.path.abspath(choice)
             break
-
-    # SUGGESTION: Handle Path vs. Directory in Project Selection
-    if os.path.exists(selected_path):
-        if not os.path.isdir(selected_path):
-            print(f"[System] Error: The path '{selected_path}' points to a file, not a directory.")
-            return None
-    else:
-        create = input(f"The directory '{selected_path}' does not exist. Do you want to create it? (y/N): ").lower()
+    if os.path.exists(selected_path) and not os.path.isdir(selected_path):
+        print(f"[System] Error: The path '{selected_path}' points to a file, not a directory.")
+        return None
+    elif not os.path.exists(selected_path):
+        create = input(f"The directory '{selected_path}' does not exist. Create it? (y/N): ").lower()
         if create == 'y':
             os.makedirs(selected_path)
             print(f"[System] Created project directory: '{selected_path}'")
         else:
             print("[System] Project selection canceled.")
             return None
-
     update_recent_projects(selected_path)
     print(f"[System] Using project directory: '{selected_path}'")
     return selected_path
 
-# --- State Management (uses global project_path) ---
+# --- Archetype/Plugin Management ---
+def load_archetypes():
+    """Scans the archetypes directory and dynamically loads valid archetype modules."""
+    archetypes = {}
+    if not os.path.isdir(ARCHETYPE_DIR):
+        print(f"[System] Warning: Archetypes directory '{ARCHETYPE_DIR}' not found.")
+        return archetypes
+    for filename in os.listdir(ARCHETYPE_DIR):
+        if filename.endswith(".py") and not filename.startswith("__"):
+            module_name = filename[:-3]
+            try:
+                spec = importlib.util.spec_from_file_location(module_name, os.path.join(ARCHETYPE_DIR, filename))
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                if hasattr(module, 'get_initial_state'):
+                    archetypes[module_name] = module
+                    print(f"[System] Loaded archetype: '{module_name}'")
+                else:
+                    print(f"[System] Warning: Skipping '{filename}' as it lacks a 'get_initial_state' function.")
+            except Exception as e:
+                print(f"[System] Error loading archetype '{filename}': {e}")
+    return archetypes
+
+def select_or_load_archetype(available_archetypes):
+    """Loads the archetype for the current project or prompts the user to select one."""
+    global current_archetype_module, custom_commands
+    archetype_conf_path = os.path.join(project_path, ARCHETYPE_CONFIG_FILE)
+    if os.path.exists(archetype_conf_path):
+        with open(archetype_conf_path, 'r') as f:
+            archetype_name = f.read().strip()
+        if archetype_name in available_archetypes:
+            current_archetype_module = available_archetypes[archetype_name]
+            print(f"[System] Resumed project with archetype: '{archetype_name}'")
+            return True
+        else:
+            print(f"[System] Error: Saved archetype '{archetype_name}' not found. Please select a new one.")
+
+    # --- New Project or Missing Archetype ---
+    if not available_archetypes:
+        print("[System] Error: No archetypes found. Cannot start a new project.")
+        return False
+
+    print("\n[Archy] Select a project archetype:")
+    options = list(available_archetypes.keys())
+    for i, name in enumerate(options, 1):
+        print(f"  {i}. {name}")
+
+    while True:
+        try:
+            choice_str = input("Enter the number for the archetype: ")
+            choice_index = int(choice_str) - 1
+            if 0 <= choice_index < len(options):
+                chosen_name = options[choice_index]
+                current_archetype_module = available_archetypes[chosen_name]
+                os.makedirs(os.path.dirname(archetype_conf_path), exist_ok=True)
+                with open(archetype_conf_path, 'w') as f:
+                    f.write(chosen_name)
+                print(f"[System] New project started with archetype: '{chosen_name}'")
+                return True
+            else:
+                print("[System] Invalid number.")
+        except (ValueError, IndexError):
+            print("[System] Invalid input.")
+
+# --- State Management ---
 def load_state():
-    """Loads the project state from the JSON file within the project directory."""
+    """Loads the project state from the JSON file."""
     state_file_path = os.path.join(project_path, ".archy", STATE_FILE_NAME)
     if os.path.exists(state_file_path):
         try:
             with open(state_file_path, 'r') as f:
                 return json.load(f)
         except json.JSONDecodeError:
-            print(f"[System] Warning: Could not parse '{state_file_path}'. Starting with a fresh state.")
-            return {}
-    return {
-        "plan": None,
-        "specifications": {},
-        "code": {},
-        "projectConfig": {}
-    }
+            print(f"[System] Warning: Could not parse '{state_file_path}'. Check for errors.")
+            return None
+    return {} # Return empty dict for new projects
 
 def save_state():
-    """Saves the project state to the JSON file within the project directory."""
+    """Saves the project state to the JSON file."""
     state_file_path = os.path.join(project_path, ".archy", STATE_FILE_NAME)
     os.makedirs(os.path.dirname(state_file_path), exist_ok=True)
     with open(state_file_path, 'w') as f:
@@ -206,20 +323,19 @@ def deep_merge(source, destination):
             destination[key] = value
     return destination
 
-# --- Checkpoint and Undo Functionality (uses global project_path) ---
+# --- Checkpoint and Undo Functionality ---
 def save_checkpoint(name):
-    """Saves the current project state as a checkpoint in the project directory."""
+    """Saves the current project state as a checkpoint."""
     state_file_path = os.path.join(project_path, ".archy", STATE_FILE_NAME)
     checkpoint_dir = os.path.join(project_path, CHECKPOINT_DIR_NAME)
     if not os.path.exists(state_file_path):
-        print("[System] No project state to save a checkpoint for.")
         return False
     os.makedirs(checkpoint_dir, exist_ok=True)
     checkpoint_path = os.path.join(checkpoint_dir, f"{name}.json")
     try:
         shutil.copyfile(state_file_path, checkpoint_path)
-        if name != ".undo": # Don't print a confirmation message for automatic undo checkpoints
-             print(f"[System] Checkpoint '{name}' saved successfully.")
+        if name != ".undo":
+             print(f"[System] Checkpoint '{name}' saved.")
         return True
     except Exception as e:
         print(f"[System] Error saving checkpoint '{name}': {e}")
@@ -236,8 +352,8 @@ def revert_to_checkpoint(name):
         return False
     try:
         shutil.copyfile(checkpoint_path, state_file_path)
-        project_state = load_state() # Reload state from the reverted file
-        print(f"[System] Project state successfully reverted to checkpoint '{name}'.")
+        project_state = load_state()
+        print(f"[System] Project state reverted to checkpoint '{name}'.")
         return True
     except Exception as e:
         print(f"[System] Error reverting to checkpoint '{name}': {e}")
@@ -246,7 +362,7 @@ def revert_to_checkpoint(name):
 def list_checkpoints():
     """Lists all available checkpoints for the current project."""
     checkpoint_dir = os.path.join(project_path, CHECKPOINT_DIR_NAME)
-    if not os.path.exists(checkpoint_dir):
+    if not os.path.isdir(checkpoint_dir):
         print("[System] No checkpoints found for this project.")
         return
     checkpoints = [f.replace('.json', '') for f in os.listdir(checkpoint_dir) if f.endswith('.json') and not f.startswith('.')]
@@ -254,7 +370,7 @@ def list_checkpoints():
         print("[System] No checkpoints found for this project.")
         return
     print("[System] Available checkpoints:")
-    for cp in checkpoints:
+    for cp in sorted(checkpoints):
         print(f"  - {cp}")
 
 # --- Helper Functions for Parsing State ---
@@ -276,7 +392,7 @@ def get_task_ids_from_plan(plan):
 
 # --- .archyignore Functionality ---
 def load_ignore_rules():
-    """Loads rules from .archyignore file in the project directory."""
+    """Loads rules from .archyignore file."""
     ignore_file_path = os.path.join(project_path, ".archy", ".archyignore")
     if not os.path.exists(ignore_file_path):
         return []
@@ -295,7 +411,7 @@ def is_ignored(file_path, ignore_rules):
 def prompt_for_id(prompt_message, id_options):
     """Prompts the user to select an ID from a list of options."""
     if not id_options:
-        print(f"[System] No options available for this command.")
+        print("[System] No options available for this command.")
         return None
     while True:
         try:
@@ -313,7 +429,21 @@ def prompt_for_id(prompt_message, id_options):
 
 # --- LLM Interaction & State Processing ---
 def generate_prompt_for_user(user_command):
-    """Constructs a context-aware prompt, prints it, and copies it to the clipboard."""
+    """Constructs a context-aware prompt based on the archetype and state, prints it, and copies it to the clipboard."""
+    # Determine the base prompt (either from Archy core or archetype override)
+    if getattr(current_archetype_module, 'PROMPT_OVERRIDE', False):
+        try:
+            base_prompt = current_archetype_module.get_master_prompt()
+        except AttributeError:
+            print("[System] Error: Archetype has PROMPT_OVERRIDE=True but no get_master_prompt() function.")
+            return None, {}
+    else:
+        base_prompt = get_archy_master_prompt()
+        # Append additions from the archetype if they exist
+        if hasattr(current_archetype_module, 'get_prompt_additions'):
+            base_prompt += "\n" + current_archetype_module.get_prompt_additions()
+
+    # --- Context building (similar to original logic) ---
     command_parts = user_command.split(maxsplit=1)
     command = command_parts[0].lower()
     args = command_parts[1] if len(command_parts) > 1 else ""
@@ -372,8 +502,8 @@ def generate_prompt_for_user(user_command):
         # README command needs all specifications for a full overview
         context_state['specifications'] = project_state.get("specifications")
 
-    prompt = f"{SYSTEM_PROMPT}\n\n--- Current Project State (Context) ---\n{json.dumps(context_state, indent=2)}{existing_files_prompt_section}\n\n--- User Command ---\n{user_command}"
-    
+    prompt = f"{base_prompt}\n\n--- Current Project State (Context) ---\n{json.dumps(context_state, indent=2)}\n\n--- User Command ---\n{user_command}"
+
     print("\n--- PROMPT FOR MANUAL EXECUTION (Copied to Clipboard) ---")
     print(prompt)
     print("-------------------------------------------------------------")
@@ -384,7 +514,6 @@ def generate_prompt_for_user(user_command):
         print("[System] Could not copy to clipboard. Please install 'pyperclip' or copy the prompt manually.")
     return prompt, file_ownership
 
-# --- NEW: Dependency Merging Logic ---
 def _merge_requirements_txt(old_content, new_content):
     """Merges two requirements.txt file contents."""
     old_reqs = set(line.strip() for line in old_content.splitlines() if line.strip())
@@ -397,36 +526,30 @@ def _merge_package_json(old_content, new_content):
     try:
         old_pkg = json.loads(old_content)
         new_pkg = json.loads(new_content)
-        
         # Deep merge for dependencies and scripts
         for key in ['dependencies', 'devDependencies', 'scripts']:
             if key in new_pkg:
                 if key not in old_pkg or not isinstance(old_pkg.get(key), dict):
                     old_pkg[key] = {}
                 old_pkg[key].update(new_pkg[key])
-        
         # Overwrite other top-level properties
         for key, value in new_pkg.items():
             if key not in ['dependencies', 'devDependencies', 'scripts']:
                 old_pkg[key] = value
-                
         return json.dumps(old_pkg, indent=2)
     except json.JSONDecodeError:
-        print(f"[System] Warning: Could not parse package.json for merging. Using new content as-is.")
+        print("[System] Warning: Could not parse package.json for merging. Using new content as-is.")
         return new_content
 
-# --- REFACTORED: State Update Processing ---
 def process_state_update(update_data, file_ownership):
-    """
-    Handles merging the AI's state update into the global project_state,
-    with special logic for merging dependency files.
-    """
+    """Handles merging the AI's state update into the global project_state."""
     global project_state
-    
+
     # --- Pre-process to merge manifest files before deep_merge ---
     if 'code' in update_data:
         for task_id, code_block in update_data['code'].items():
-            if 'files' not in code_block: continue
+            if 'files' not in code_block: 
+                continue
             
             # Use a copy to avoid issues while iterating
             files_to_update = {} 
@@ -453,14 +576,10 @@ def process_state_update(update_data, file_ownership):
 
     # Now, perform the main deep merge with the pre-processed data
     deep_merge(update_data, project_state)
-    
     save_state()
-    print(f"[System] Project state updated and saved.")
-
-    # Post-update actions
+    print("[System] Project state updated and saved.")
     if 'readme' in update_data:
         save_readme(update_data['readme'])
-    
     tasks_with_new_code = list(update_data.get('code', {}).keys())
     if tasks_with_new_code:
         print("\n[System] The following tasks have new or modified code:")
@@ -470,9 +589,10 @@ def process_state_update(update_data, file_ownership):
             for task_id in sorted(tasks_with_new_code):
                 sync_task_files(task_id)
 
-# --- File Operations (uses global project_path) ---
+# --- File Operations ---
 def sync_task_files(task_id, force_save=False):
     """Saves generated files for a specific task to disk."""
+    # This function remains largely the same as the original.
     code_block = project_state.get('code', {}).get(task_id)
     if not code_block or not code_block.get('files'):
         print(f"[System] No file information found for task {task_id}.")
@@ -484,8 +604,8 @@ def sync_task_files(task_id, force_save=False):
         print(f"\n[System] Files for task '{task_id}' will be saved in '{os.path.abspath(project_path)}/':")
         # Loop for displaying files
         for file_path in code_block.get('files', {}).keys():
-            print(f"  - {file_path}")
-        if not input(f"Do you want to save/overwrite these files? (y/N): ").lower() == 'y':
+            print("  - {file_path}")
+        if not input("Do you want to save/overwrite these files? (y/N): ").lower() == 'y':
             print(f"[System] File save for task '{task_id}' skipped.")
             return
     # Loop for saving files
@@ -515,7 +635,7 @@ def save_readme(content):
     if is_ignored("README.md", ignore_rules):
         print("[System] README.md is in .archyignore, save skipped.")
         return
-    print(f"\n[System] A new README.md is available.")
+    print("\n[System] A new README.md is available.")
     choice = input("Do you want to save/overwrite the README.md file? (y/N): ").lower()
     if choice == 'y':
         with open(readme_path, 'w', encoding='utf-8') as f:
@@ -563,24 +683,47 @@ def show_dependencies():
 # --- Main Application Loop ---
 def main():
     """The main REPL for interacting with Archy."""
-    global project_state, project_path
+    global project_state, project_path, current_archetype_module, custom_commands
     print("Welcome to Archy AI Developer Co-pilot.")
+
+    available_archetypes = load_archetypes()
+    if not available_archetypes:
+        print("[System] No archetypes found. Please create a python file in the 'archetypes' directory.")
+        return
 
     # --- Project Selection at Startup ---
     selected_path = select_project_path()
     if not selected_path:
         print("Exiting Archy. Goodbye!")
         return
-    
+
     project_path = selected_path
     project_state = load_state()
-    # Ensure the outputPath in the state is consistent with the selected path (Also to avoid malicious behaviour)
-    project_state.setdefault('projectConfig', {})['outputPath'] = project_path
-    save_state()
+    if project_state is None: # Handle JSON parsing error from load_state
+        print("Exiting due to corrupted state file.")
+        return
 
-    print("[System] Started a new project." if not project_state.get('plan') else f"[System] Resumed project from '{project_path}'")
-    print("Type 'help' for a list of commands, or 'exit' to quit.")
+
+    # --- Archetype Selection and Initialization ---
+    is_new_project = not bool(project_state)
+    if not select_or_load_archetype(available_archetypes):
+        return # Exit if no archetype could be selected/loaded
+
+    if is_new_project:
+        project_state = current_archetype_module.get_initial_state()
+        project_state.setdefault('projectConfig', {})['outputPath'] = project_path
+        save_state()
+        print("[System] New project state initialized from archetype.")
     
+    # Load custom commands from the archetype
+    if hasattr(current_archetype_module, 'get_custom_commands'):
+        custom_commands = current_archetype_module.get_custom_commands()
+        if custom_commands:
+            print(f"[System] Loaded {len(custom_commands)} custom command(s) from archetype.")
+
+
+    print("Type 'help' for a list of commands, or 'exit' to quit.")
+
     while True:
         user_input = input("\n> ")
         if not user_input:
@@ -592,32 +735,51 @@ def main():
         if command == 'exit':
             break
         elif command == 'help':
-            print("""
-Available Commands:
-- plan <description>         : Creates a new project plan.
-- specify <Milestone-ID>     : Generates specifications for a milestone. (Interactive)
-- code <Task-ID>             : Generates or merges code for a task. (Interactive)
-- refine <ID> <instruction>  : Modifies a plan, spec, or code. (Interactive)
-- generate_readme            : Creates a README.md from the project state.
-- sync <Task-ID|all>         : Recreates files from the project state, skipping ignored files.
-- show-plan                  : Displays the current project plan.
-- show-spec <Milestone-ID>   : Displays the specification for a milestone. (Interactive)
-- show-code <Task-ID>        : Displays the code for a task. (Interactive)
-- show-deps                  : Displays a summary of all dependencies from manifest files.
+            print("\nAvailable Commands:")
+            # Define categories for better organization
+            llm_commands = ['plan', 'specify', 'code', 'refine', 'generate_readme']
+            local_commands = ['sync', 'show-plan', 'show-spec', 'show-code', 'show-deps']
+            enhanced_commands = ['set-config', 'show-config', 'check', 'checkpoint', 'list-checkpoints', 'revert', 'undo', 'exit']
 
-ENHANCED COMMANDS:
-- set-config <key> <value>   : Sets a global project configuration value (e.g., 'projectName').
-- show-config                : Displays the current project configuration settings.
-- check                      : Validates the project state for inconsistencies.
-- checkpoint <name>          : Saves the current project state as a named checkpoint.
-- list-checkpoints           : Shows all saved checkpoints.
-- revert <name>              : Reverts the project state to a named checkpoint.
-- undo                       : Reverts the last state-changing operation.
-- exit                       : Quits the application.
+            # Print standard commands
+            for cmd_name in llm_commands + local_commands:
+                details = COMMAND_DEFINITIONS.get(cmd_name, {})
+                usage = details.get('usage', cmd_name).ljust(28)
+                desc = details.get('desc', 'No description available.')
+                print(f"- {usage}: {desc}")
 
-Note: Commands marked (Interactive) will prompt you for a selection if run without arguments.
-An .archyignore file can be created in your project's .archy directory to protect files from `sync` and `code` commands.
-            """)
+            print("\nENHANCED COMMANDS:")
+            for cmd_name in enhanced_commands:
+                details = COMMAND_DEFINITIONS.get(cmd_name, {})
+                usage = details.get('usage', cmd_name).ljust(28)
+                desc = details.get('desc', 'No description available.')
+                print(f"- {usage}: {desc}")
+
+            # Print custom commands from archetype, if they exist
+            if custom_commands:
+                print("\nARCHETYPE COMMANDS:")
+                for cmd_name, handler in custom_commands.items():
+                    # Format archetype commands similarly
+                    usage = cmd_name.ljust(28)
+                    doc = handler.__doc__ or "No description available."
+                    print(f"- {usage}: {doc.strip()}")
+            
+            print("\nNote: Commands marked (Interactive) will prompt you for a selection if run without arguments.")
+            print("An .archyignore file can be created in your project's .archy directory to protect files from `sync` and `code` commands.")
+            continue
+
+        # --- Custom Command Handling ---
+        if command in custom_commands:
+            print(f"[System] Executing custom command: {command}")
+            try:
+                # Custom commands are expected to modify the project_state in place
+                # or return a new state to be merged.
+                # For simplicity, we'll have them modify the global state and then we save it.
+                custom_commands[command](project_state)
+                save_state()
+                print("[System] Custom command executed and state saved.")
+            except Exception as e:
+                print(f"[System] Error executing custom command '{command}': {e}")
             continue
         
         # --- Commands that don't need the LLM ---
@@ -640,7 +802,8 @@ An .archyignore file can be created in your project's .archy directory to protec
                         issues_found += 1
             # 3. Check for specifications without code (handles dict-of-objects structure for specs)
             for mid, milestone_specs_dict in specs.items():
-                if not isinstance(milestone_specs_dict, dict): continue
+                if not isinstance(milestone_specs_dict, dict): 
+                    continue
                 for task_id in milestone_specs_dict.keys():
                     if task_id and task_id not in code:
                         print(f"  - [INFO] Task '{task_id}' has a specification but no code yet.")
@@ -732,6 +895,9 @@ An .archyignore file can be created in your project's .archy directory to protec
         elif command == 'show-code':
             pprint(project_state.get('code', {}).get(args.upper(), "Code not found."))
             continue
+        elif command == 'show-deps':
+            show_dependencies()
+            continue
         elif command == 'sync':
             if not args:
                 print("[System] Usage: sync <Task-ID | all>")
@@ -755,39 +921,32 @@ An .archyignore file can be created in your project's .archy directory to protec
 
         # Create an auto-undo checkpoint before the LLM call
         save_checkpoint('.undo')
-        
-        # --- Commands that require the LLM ---
         prompt, file_ownership = generate_prompt_for_user(user_input)
         if prompt is None:
             continue
-        
-        print("\n[System] Paste the LLM's JSON response below and press Enter (or Ctrl+D/Ctrl+Z+Enter to finish):")
-        response_str = ""
-        try:
-            lines = []
-            while True:
-                lines.append(input())
-        except EOFError:
-            response_str = "\n".join(lines)
+
+        print("\n[System] Paste the LLM's JSON response below (Ctrl+D (macOS/Linux) or Ctrl+Z then press Enter (windows) to finish):")
+        response_str = "".join(sys.stdin.readlines())
         if not response_str.strip():
             print("[System] No response received. Aborting command.")
             continue
-        
+
         try:
             if response_str.strip().startswith("```json"):
                 response_str = response_str.strip()[7:-4].strip()
             response_json = json.loads(response_str)
         except json.JSONDecodeError:
-            print("[System] Error: Invalid JSON response received. Ensure you copy only the JSON object.")
+            print("[System] Error: Invalid JSON response received. State not changed. Ensure you copy only the JSON object.")
             print("--- Received Text ---\n" + response_str + "\n-----------------------")
             continue
-        
+
         print(f"\n[Archy] {response_json.get('message', 'No message received.')}")
 
         if response_json.get('status', '').lower() == 'success' and 'stateUpdate' in response_json:
             process_state_update(response_json['stateUpdate'], file_ownership)
         else:
             print("[System] The AI indicated the request could not be completed successfully. Project state was not changed.")
+
 
 if __name__ == '__main__':
     main()

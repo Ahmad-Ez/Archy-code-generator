@@ -97,7 +97,13 @@ your-project-folder/        <-- A project you are building with Archy.
 
 7.  **Sync Dependencies & Files**: The tool will automatically update dependency files like `requirements.txt`. If you ever need to regenerate all files from the state, run `sync all`.
 
-### Available Commands
+
+### Usage Examples
+
+To see how Archy works in practice, check out the detailed walkthroughs in the `examples` directory:
+
+* **[Simple CLI Tool](./examples/simple_cli_example.md)**: A step-by-step guide to creating a basic command-line application from scratch using the `simple` archetype.
+* **[Generic Web Application](./examples/generic_webapp_example.md)**: Demonstrates how to bootstrap a full-stack web application using the pre-defined `generic_webapp` archetype.### Available Commands
 
 The following commands are available in the Archy REPL. Archetypes can also add their own custom commands.
 

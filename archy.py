@@ -158,6 +158,7 @@ If the prompt includes an `EXISTING_FILES_TO_MODIFY` section, your primary goal 
 --- Quality & Security Gates (NON-NEGOTIABLE) ---
 When generating code:
 - **File Object Schema**: The `files` key MUST be a JSON object. Each key is the full relative `path` (string), and its value is the entire file `content` (string).
+- **JSON String Escaping**: When the `content` of a file is provided as a string value in the JSON response, all double quotes (`"`) within that file's content MUST be properly escaped with a backslash (e.g., `\"`). This is critical for the overall JSON response to be syntactically valid.
 - **Security**: Never hardcode secrets. Use placeholders like `os.environ.get("API_KEY")` and state they must be managed via environment variables. All database queries MUST use parameterized statements. Sanitize all user-facing inputs.
 - **Error Handling**: Include robust error handling (e.g., try-except blocks).
 - **Readability**: Code must be well-commented with clear docstrings and adhere to style guides (e.g., PEP 8 for Python).
@@ -926,13 +927,20 @@ def main():
             continue
 
         print("\n[System] Paste the LLM's JSON response below (Ctrl+D (macOS/Linux) or Ctrl+Z then press Enter (windows) to finish):")
-        response_str = "".join(sys.stdin.readlines())
+        response_str = ""
+        try:
+            lines = []
+            while True:
+                lines.append(input())
+        except EOFError:
+            response_str = "\n".join(lines)
         if not response_str.strip():
             print("[System] No response received. Aborting command.")
             continue
         try:
             if response_str.strip().startswith("```json"):
                 response_str = response_str.strip()[7:-4].strip()
+            response_str = response_str.replace('\u00a0', ' ')
             response_json = json.loads(response_str.strip())
         except json.JSONDecodeError:
             print("[System] Error: Invalid JSON response received. State not changed. Ensure you copy only the JSON object.")

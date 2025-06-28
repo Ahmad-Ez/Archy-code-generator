@@ -5,7 +5,6 @@ from pprint import pprint
 import shutil
 import fnmatch
 import importlib.util
-import sys
 
 # --- Global Configuration for Archy ---
 ARCHY_CONFIG_PATH = os.path.join(os.path.expanduser("~"), ".archy", "config.json")
@@ -605,7 +604,7 @@ def sync_task_files(task_id, force_save=False):
         print(f"\n[System] Files for task '{task_id}' will be saved in '{os.path.abspath(project_path)}/':")
         # Loop for displaying files
         for file_path in code_block.get('files', {}).keys():
-            print("  - {file_path}")
+            print(f"  - {file_path}")
         if not input("Do you want to save/overwrite these files? (y/N): ").lower() == 'y':
             print(f"[System] File save for task '{task_id}' skipped.")
             return

@@ -933,7 +933,7 @@ def main():
         try:
             if response_str.strip().startswith("```json"):
                 response_str = response_str.strip()[7:-4].strip()
-            response_json = json.loads(response_str)
+            response_json = json.loads(response_str.strip())
         except json.JSONDecodeError:
             print("[System] Error: Invalid JSON response received. State not changed. Ensure you copy only the JSON object.")
             print("--- Received Text ---\n" + response_str + "\n-----------------------")

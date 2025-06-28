@@ -622,7 +622,9 @@ def sync_task_files(task_id, force_save=False):
                 continue
             os.makedirs(os.path.dirname(final_path_abs), exist_ok=True)
             with open(final_path_abs, 'w', encoding='utf-8') as f:
-                f.write(file_content)
+                # Un-escape the quotes before writing to the file
+                corrected_content = file_content.replace('\\"', '"')
+                f.write(corrected_content)
             print(f"  Saved {final_path_abs}")
     print(f"[System] Files for {task_id} saved.")
 
